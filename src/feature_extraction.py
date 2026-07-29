@@ -43,25 +43,27 @@ class FacialFeatureExtractor:
 
         h, w, _ = image_bgr.shape
         gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+        # Apply Histogram Equalization to handle backlit/shadowed faces
+        gray_eq = cv2.equalizeHist(gray)
 
         # Detect face
-        faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(30, 30))
+        faces = self.face_cascade.detectMultiScale(gray_eq, scaleFactor=1.1, minNeighbors=3, minSize=(30, 30))
         
         if len(faces) > 0:
             fx, fy, fw, fh = faces[0]
-            face_roi = gray[fy:fy+fh, fx:fx+fw]
+            face_roi = gray_eq[fy:fy+fh, fx:fx+fw]
         else:
-            # If face detector missed, use center crop
-            fx, fy, fw, fh = 0, 0, w, h
-            face_roi = gray
+            # If face detector missed, use center face region
+            fx, fy, fw, fh = int(w * 0.15), int(h * 0.15), int(w * 0.7), int(h * 0.7)
+            face_roi = gray_eq[fy:fy+fh, fx:fx+fw]
 
         fh_half = fh // 2
         eye_region = face_roi[0:fh_half, :]
         mouth_region = face_roi[fh_half:, :]
 
         # Detect eyes in upper region
-        eyes = self.eye_cascade.detectMultiScale(eye_region)
-        ear1, ear2 = 0.25, 0.25
+        eyes = self.eye_cascade.detectMultiScale(eye_region, scaleFactor=1.1, minNeighbors=3)
+        
         if len(eyes) >= 2:
             ex1, ey1, ew1, eh1 = eyes[0]
             ex2, ey2, ew2, eh2 = eyes[1]
@@ -71,6 +73,14 @@ class FacialFeatureExtractor:
             ex1, ey1, ew1, eh1 = eyes[0]
             ear1 = float(eh1) / float(ew1 + 1e-6)
             ear2 = ear1
+        else:
+            # When eyes are closed, eye cascade cannot detect eyes -> EAR drops to closed state (0.12)
+            # Measure upper eye region dark intensity threshold
+            upper_eye_darkness = np.mean(eye_region) / 255.0 if eye_region.size > 0 else 0.5
+            if upper_eye_darkness < 0.40:
+                ear1, ear2 = 0.12, 0.12 # Closed eyes threshold
+            else:
+                ear1, ear2 = 0.15, 0.15 # Reduced EAR for undetected/closed eyes
 
         avg_ear = (ear1 + ear2) / 2.0
 
