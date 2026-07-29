@@ -89,52 +89,52 @@ async def predict_frame(file: UploadFile = File(...)):
     if frame is None:
         raise HTTPException(status_code=400, detail="Invalid image payload.")
 
-        # Extract features (with contrast enhancement)
-        from src.feature_extraction import FacialFeatureExtractor
-        extractor = FacialFeatureExtractor()
-        features = extractor.extract_from_image(frame)
+    # Extract features (with contrast enhancement)
+    from src.feature_extraction import FacialFeatureExtractor
+    extractor = FacialFeatureExtractor()
+    features = extractor.extract_from_image(frame)
 
-        if features is None:
-            return {"face_detected": False, "status": "FEATURE_EXTRACTION_FAILED", "drowsiness_probability": 0.0, "mobile_usage_detected": False}
+    if features is None:
+        return {"face_detected": False, "status": "FEATURE_EXTRACTION_FAILED", "drowsiness_probability": 0.0, "mobile_usage_detected": False}
 
-        avg_ear = float(features[2])
-        mar = float(features[3])
-        phone_holding_score = float(features[9]) if len(features) >= 10 else 0.0
+    avg_ear = float(features[2])
+    mar = float(features[3])
+    phone_holding_score = float(features[9]) if len(features) >= 10 else 0.0
 
-        mobile_usage_detected = phone_holding_score > 0.15
+    mobile_usage_detected = phone_holding_score > 0.15
 
-        if model is not None and scaler is not None:
-            try:
-                scaled_feat = scaler.transform([features])
-                pred_class = int(model.predict(scaled_feat)[0])
-                prob_drowsy = float(model.predict_proba(scaled_feat)[0][1]) if hasattr(model, "predict_proba") else 0.5
-            except Exception:
-                prob_drowsy = 0.85 if avg_ear < 0.22 else 0.10
-                pred_class = 1 if avg_ear < 0.22 else 0
-        else:
+    if model is not None and scaler is not None:
+        try:
+            scaled_feat = scaler.transform([features])
+            pred_class = int(model.predict(scaled_feat)[0])
+            prob_drowsy = float(model.predict_proba(scaled_feat)[0][1]) if hasattr(model, "predict_proba") else 0.5
+        except Exception:
             prob_drowsy = 0.85 if avg_ear < 0.22 else 0.10
             pred_class = 1 if avg_ear < 0.22 else 0
+    else:
+        prob_drowsy = 0.85 if avg_ear < 0.22 else 0.10
+        pred_class = 1 if avg_ear < 0.22 else 0
 
-        # Trigger Drowsiness if EAR < 0.22 (eyes closed) or model probability > 0.45
-        is_drowsy = (avg_ear < 0.22) or (pred_class == 1) or (prob_drowsy > 0.45) or (mar > 0.55)
+    # Trigger Drowsiness if EAR < 0.22 (eyes closed) or model probability > 0.45
+    is_drowsy = (avg_ear < 0.22) or (pred_class == 1) or (prob_drowsy > 0.45) or (mar > 0.55)
 
-        if mobile_usage_detected:
-            status = "MOBILE_PHONE_USE"
-        elif is_drowsy:
-            status = "DROWSY"
-            prob_drowsy = max(prob_drowsy, 0.92)
-        else:
-            status = "NORMAL"
+    if mobile_usage_detected:
+        status = "MOBILE_PHONE_USE"
+    elif is_drowsy:
+        status = "DROWSY"
+        prob_drowsy = max(prob_drowsy, 0.92)
+    else:
+        status = "NORMAL"
 
-        return {
-            "face_detected": True,
-            "status": status,
-            "drowsiness_probability": round(prob_drowsy, 4),
-            "mobile_usage_detected": mobile_usage_detected,
-            "phone_holding_score": round(phone_holding_score, 4),
-            "avg_ear": round(avg_ear, 3),
-            "prediction_class": 1 if is_drowsy else 0
-        }
+    return {
+        "face_detected": True,
+        "status": status,
+        "drowsiness_probability": round(prob_drowsy, 4),
+        "mobile_usage_detected": mobile_usage_detected,
+        "phone_holding_score": round(phone_holding_score, 4),
+        "avg_ear": round(avg_ear, 3),
+        "prediction_class": 1 if is_drowsy else 0
+    }
 
 if __name__ == "__main__":
     import uvicorn

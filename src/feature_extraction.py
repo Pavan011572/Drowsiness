@@ -47,21 +47,20 @@ class FacialFeatureExtractor:
         gray_eq = cv2.equalizeHist(gray)
 
         # Detect face
-        faces = self.face_cascade.detectMultiScale(gray_eq, scaleFactor=1.1, minNeighbors=3, minSize=(30, 30))
+        faces = self.face_cascade.detectMultiScale(gray_eq, scaleFactor=1.1, minNeighbors=3, minSize=(50, 50))
         
         if len(faces) > 0:
             fx, fy, fw, fh = faces[0]
             face_roi = gray_eq[fy:fy+fh, fx:fx+fw]
         else:
-            # If face detector missed, use center face region
-            fx, fy, fw, fh = int(w * 0.15), int(h * 0.15), int(w * 0.7), int(h * 0.7)
-            face_roi = gray_eq[fy:fy+fh, fx:fx+fw]
+            # If no face detected, return neutral normal values (prevents background noise false alarms)
+            return np.array([0.25, 0.25, 0.25, 0.35, 0.5, 0.5, 0.1, 0.0, 0.0, 0.0, 0.5, 0.5])
 
         fh_half = fh // 2
         eye_region = face_roi[0:fh_half, :]
         mouth_region = face_roi[fh_half:, :]
 
-        # Detect eyes in upper region
+        # Detect eyes strictly within upper face region
         eyes = self.eye_cascade.detectMultiScale(eye_region, scaleFactor=1.1, minNeighbors=3)
         
         if len(eyes) >= 2:
@@ -74,13 +73,8 @@ class FacialFeatureExtractor:
             ear1 = float(eh1) / float(ew1 + 1e-6)
             ear2 = ear1
         else:
-            # When eyes are closed, eye cascade cannot detect eyes -> EAR drops to closed state (0.12)
-            # Measure upper eye region dark intensity threshold
-            upper_eye_darkness = np.mean(eye_region) / 255.0 if eye_region.size > 0 else 0.5
-            if upper_eye_darkness < 0.40:
-                ear1, ear2 = 0.12, 0.12 # Closed eyes threshold
-            else:
-                ear1, ear2 = 0.15, 0.15 # Reduced EAR for undetected/closed eyes
+            # Eyes closed inside face ROI -> EAR drops to 0.12
+            ear1, ear2 = 0.12, 0.12
 
         avg_ear = (ear1 + ear2) / 2.0
 
