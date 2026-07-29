@@ -14,7 +14,8 @@ app = FastAPI(
     version="1.0.0"
 )
 
-MODEL_DIR = r"c:\Users\surya\Downloads\drow\models"
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODEL_DIR = os.path.join(BASE_DIR, "models")
 MODEL_PATH = os.path.join(MODEL_DIR, "stacking_ensemble.pkl")
 SCALER_PATH = os.path.join(MODEL_DIR, "scaler.pkl")
 METRICS_PATH = os.path.join(MODEL_DIR, "model_metrics.json")

@@ -13,9 +13,10 @@ def main():
 
     args = parser.parse_args()
 
-    dataset_path = r"c:\Users\surya\Downloads\drow\Driver Drowsiness Dataset (DDD)"
-    csv_features = r"c:\Users\surya\Downloads\drow\data\extracted_features.csv"
-    models_dir = r"c:\Users\surya\Downloads\drow\models"
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    dataset_path = os.path.join(base_dir, "Driver Drowsiness Dataset (DDD)")
+    csv_features = os.path.join(base_dir, "data", "extracted_features.csv")
+    models_dir = os.path.join(base_dir, "models")
 
     # Default to --all if no arguments provided
     if not any(vars(args).values()):
