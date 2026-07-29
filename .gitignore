@@ -1,0 +1,11 @@
+# Ignore raw heavy image datasets
+Driver Drowsiness Dataset (DDD)/
+Driver Drowsiness Dataset (DDD)_reduced/
+
+# Ignore Python cache & temporary files
+__pycache__/
+*.pyc
+*.zip
+.vscode/
+.idea/
+*.log
