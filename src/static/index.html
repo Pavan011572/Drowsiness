@@ -125,6 +125,7 @@
             align-items: center;
             transition: all 0.3s ease;
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            z-index: 10;
         }
 
         .hud-banner.drowsy {
@@ -374,9 +375,11 @@
 
         let stream = null;
         let isProcessing = false;
+        let isSending = false;
         let alarmDismissed = false;
         let audioCtx = null;
         let lastFrameTime = performance.now();
+        let consecClosedFrames = 0;
 
         function initAudio() {
             if (!audioCtx) {
@@ -386,19 +389,21 @@
 
         function playBeep() {
             if (alarmDismissed) return;
-            initAudio();
-            if (audioCtx.state === 'suspended') {
-                audioCtx.resume();
-            }
-            const osc = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
-            osc.type = 'sine';
-            osc.frequency.setValueAtTime(2200, audioCtx.currentTime);
-            gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
-            osc.connect(gain);
-            gain.connect(audioCtx.destination);
-            osc.start();
-            osc.stop(audioCtx.currentTime + 0.15);
+            try {
+                initAudio();
+                if (audioCtx.state === 'suspended') {
+                    audioCtx.resume();
+                }
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(2200, audioCtx.currentTime);
+                gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.18);
+            } catch(e){}
         }
 
         function dismissAlarm() {
@@ -417,9 +422,9 @@
                 document.getElementById('btnStart').disabled = true;
                 document.getElementById('btnStop').disabled = false;
                 
-                video.onloadedmetadata = () => {
-                    canvas.width = video.videoWidth;
-                    canvas.height = video.videoHeight;
+                video.onloadeddata = () => {
+                    canvas.width = video.videoWidth || 640;
+                    canvas.height = video.videoHeight || 480;
                     isProcessing = true;
                     requestAnimationFrame(processFrameLoop);
                 };
@@ -440,59 +445,134 @@
             document.getElementById('btnStop').disabled = true;
         }
 
+        function analyzeClientSideFrame() {
+            if (!video.videoWidth || !video.videoHeight) return null;
+            
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const frameData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const data = frameData.data;
+            
+            // Analyze upper face / eye region pixel darkness
+            const startY = Math.floor(canvas.height * 0.25);
+            const endY = Math.floor(canvas.height * 0.50);
+            const startX = Math.floor(canvas.width * 0.25);
+            const endX = Math.floor(canvas.width * 0.75);
+            
+            let totalDarkness = 0;
+            let count = 0;
+            for (let y = startY; y < endY; y += 4) {
+                for (let x = startX; x < endX; x += 4) {
+                    const idx = (y * canvas.width + x) * 4;
+                    const r = data[idx], g = data[idx+1], b = data[idx+2];
+                    const brightness = (r + g + b) / 3;
+                    if (brightness < 60) totalDarkness++;
+                    count++;
+                }
+            }
+            const darknessRatio = totalDarkness / (count + 1e-6);
+
+            // Analyze lateral ear region (mobile phone holding proxy)
+            let leftEarDarkness = 0, rightEarDarkness = 0;
+            const earW = Math.floor(canvas.width * 0.18);
+            for (let y = Math.floor(canvas.height * 0.2); y < Math.floor(canvas.height * 0.7); y += 4) {
+                for (let x = 0; x < earW; x += 4) {
+                    const idx = (y * canvas.width + x) * 4;
+                    if ((data[idx] + data[idx+1] + data[idx+2]) / 3 < 50) leftEarDarkness++;
+                }
+                for (let x = canvas.width - earW; x < canvas.width; x += 4) {
+                    const idx = (y * canvas.width + x) * 4;
+                    if ((data[idx] + data[idx+1] + data[idx+2]) / 3 < 50) rightEarDarkness++;
+                }
+            }
+
+            const phoneScore = Math.max(leftEarDarkness, rightEarDarkness) / 500.0;
+            return { darknessRatio, phoneScore };
+        }
+
         async function processFrameLoop() {
             if (!isProcessing) return;
 
             const now = performance.now();
-            const fps = 1000 / (now - lastFrameTime);
+            const fps = 1000 / (now - lastFrameTime + 1e-6);
             lastFrameTime = now;
             document.getElementById('txtFps').innerText = fps.toFixed(1);
 
-            // Capture current frame to blob
-            const tempCanvas = document.createElement('canvas');
-            tempCanvas.width = video.videoWidth;
-            tempCanvas.height = video.videoHeight;
-            const tCtx = tempCanvas.getContext('2d');
-            tCtx.drawImage(video, 0, 0, tempCanvas.width, tempCanvas.height);
+            // 1. Client-Side Real-Time Analysis
+            const clientMetrics = analyzeClientSideFrame();
 
-            tempCanvas.toBlob(async (blob) => {
-                if (!blob || !isProcessing) return;
-                const formData = new FormData();
-                formData.append('file', blob, 'frame.jpg');
+            // 2. Async Server Prediction
+            if (!isSending && video.videoWidth > 0) {
+                isSending = true;
+                const tempCanvas = document.createElement('canvas');
+                tempCanvas.width = video.videoWidth;
+                tempCanvas.height = video.videoHeight;
+                tempCanvas.getContext('2d').drawImage(video, 0, 0);
 
-                try {
-                    const response = await fetch('/predict', {
-                        method: 'POST',
-                        body: formData
-                    });
-                    const res = await response.json();
-                    updateUI(res);
-                } catch (e) {
-                    console.error("API error:", e);
-                }
+                tempCanvas.toBlob(async (blob) => {
+                    if (blob) {
+                        const formData = new FormData();
+                        formData.append('file', blob, 'frame.jpg');
 
-                if (isProcessing) {
-                    setTimeout(() => requestAnimationFrame(processFrameLoop), 150);
-                }
-            }, 'image/jpeg', 0.7);
+                        try {
+                            const response = await fetch('/predict', {
+                                method: 'POST',
+                                body: formData
+                            });
+                            const res = await response.json();
+                            updateUI(res, clientMetrics);
+                        } catch (e) {
+                            // Fallback to client-side detection
+                            updateUI(null, clientMetrics);
+                        }
+                    }
+                    isSending = false;
+                }, 'image/jpeg', 0.6);
+            } else {
+                updateUI(null, clientMetrics);
+            }
+
+            if (isProcessing) {
+                setTimeout(processFrameLoop, 100);
+            }
         }
 
-        function updateUI(data) {
+        function updateUI(serverData, clientMetrics) {
             const banner = document.getElementById('hudBanner');
             const statusText = document.getElementById('hudStatusText');
             const badge = document.getElementById('hudBadge');
             const overlay = document.getElementById('alertOverlay');
 
-            const drowsyProb = (data.drowsiness_probability || 0) * 100;
-            const phoneScore = data.phone_holding_score || 0;
+            let status = "NORMAL";
+            let drowsyProb = 0;
+            let phoneScore = clientMetrics ? clientMetrics.phoneScore : 0;
+
+            if (serverData && serverData.status) {
+                status = serverData.status;
+                drowsyProb = (serverData.drowsiness_probability || 0) * 100;
+                phoneScore = serverData.phone_holding_score || phoneScore;
+            } else if (clientMetrics) {
+                if (clientMetrics.darknessRatio > 0.40) {
+                    consecClosedFrames++;
+                } else {
+                    consecClosedFrames = 0;
+                    alarmDismissed = false;
+                }
+
+                if (consecClosedFrames >= 3) {
+                    status = "DROWSY";
+                    drowsyProb = 95.0;
+                } else if (clientMetrics.phoneScore > 0.15) {
+                    status = "MOBILE_PHONE_USE";
+                }
+            }
 
             document.getElementById('txtDrowsyRisk').innerText = drowsyProb.toFixed(1) + "%";
             document.getElementById('barDrowsyRisk').style.width = Math.min(100, drowsyProb) + "%";
             
             document.getElementById('txtPhoneScore').innerText = phoneScore.toFixed(3);
-            document.getElementById('barPhoneScore').style.width = Math.min(100, phoneScore * 500) + "%";
+            document.getElementById('barPhoneScore').style.width = Math.min(100, phoneScore * 300) + "%";
 
-            if (data.status === "MOBILE_PHONE_USE") {
+            if (status === "MOBILE_PHONE_USE") {
                 banner.className = "hud-banner mobile";
                 statusText.innerText = "ALERT: MOBILE PHONE IN USE (HELD TO EAR)!";
                 badge.className = "badge badge-amber";
@@ -506,7 +586,7 @@
                     document.getElementById('alertMessage').innerText = "Mobile phone detected held near ear while driving.";
                     playBeep();
                 }
-            } else if (data.status === "DROWSY") {
+            } else if (status === "DROWSY") {
                 banner.className = "hud-banner drowsy";
                 statusText.innerText = "ALERT: DRIVER DROWSY DETECTED!";
                 badge.className = "badge badge-red";
@@ -517,7 +597,7 @@
                 if (!alarmDismissed) {
                     overlay.style.display = 'block';
                     document.getElementById('alertTitle').innerText = "CRITICAL ALERT: DROWSY DETECTED!";
-                    document.getElementById('alertMessage').innerText = "Eye closure / yawn ratio indicates severe fatigue.";
+                    document.getElementById('alertMessage').innerText = "Eye closure / fatigue detected on camera.";
                     playBeep();
                 }
             } else {
@@ -526,7 +606,6 @@
                 badge.className = "badge badge-green";
                 badge.innerText = "SAFE";
                 overlay.style.display = 'none';
-                alarmDismissed = false;
 
                 document.getElementById('barDrowsyRisk').style.backgroundColor = "var(--accent-green)";
                 document.getElementById('barPhoneScore').style.backgroundColor = "var(--accent-green)";
